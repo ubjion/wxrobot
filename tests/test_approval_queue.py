@@ -2,7 +2,7 @@ import pytest
 
 from app.messages.reader import MessageEvent
 from app.services.approval_queue import ApprovalQueue, PendingReply
-from app.services.wechat_sender import WeChatUISender
+from app.services.wechat_sender import WeChatSendError, WeChatUISender
 
 
 class FakeSender:
@@ -53,6 +53,23 @@ def test_failed_send_keeps_reply_for_manual_retry():
         queue.approve(token)
 
     assert len(queue.list_pending()) == 1
+
+
+def test_approve_unknown_token_returns_false_without_crashing():
+    queue = ApprovalQueue(FakeSender())
+
+    assert queue.approve("reply-missing") is False
+
+
+def test_wechat_sender_treats_failure_response_as_send_failure():
+    class FailureResponse(dict):
+        def __bool__(self):
+            return False
+
+    sender = WeChatUISender(send_func=lambda text, who, verify: FailureResponse())
+
+    with pytest.raises(WeChatSendError, match="未确认"):
+        sender.send("alice", "回复内容")
 
 
 def test_wechat_sender_passes_text_to_reference_ui_adapter():

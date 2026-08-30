@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Any, Callable
 
 
+class WeChatSendError(RuntimeError):
+    """微信 UI 未确认消息发送成功。"""
+
+
 class WeChatUISender:
     """使用参考项目的 GUI 发送能力发送文本。"""
 
@@ -24,4 +28,10 @@ class WeChatUISender:
             raise ValueError("user 不能为空")
         if not text.strip():
             raise ValueError("text 不能为空")
-        return self._send_func(text, user, verify=True)
+        result = self._send_func(text, user, verify=True)
+        if not result:
+            message = getattr(result, "get", lambda key, default=None: default)(
+                "message", "微信发送未确认"
+            )
+            raise WeChatSendError(str(message or "微信发送未确认"))
+        return result

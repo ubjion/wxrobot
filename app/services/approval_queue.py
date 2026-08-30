@@ -40,7 +40,9 @@ class ApprovalQueue:
 
     def approve(self, token: str) -> bool:
         with self._lock:
-            pending = self._pending[token]
+            pending = self._pending.get(token)
+            if pending is None:
+                return False
             self.sender.send(pending.event.user, pending.text)
             del self._pending[token]
             return True

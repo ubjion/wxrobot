@@ -69,8 +69,7 @@ def main() -> None:
                 for pending in queue.list_pending():
                     print(f"{pending.token}: {pending.event.user} <- {pending.text}")
             elif command[0] == "approve" and len(command) == 2:
-                queue.approve(command[1])
-                print("已发送")
+                print("已发送" if queue.approve(command[1]) else "未找到该回复")
             elif command[0] == "reject" and len(command) == 2:
                 print("已丢弃" if queue.reject(command[1]) else "未找到该回复")
             else:
