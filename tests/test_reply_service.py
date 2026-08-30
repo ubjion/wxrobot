@@ -31,6 +31,19 @@ def test_generates_reply_from_text_event_without_sending_session_identifier():
     assert "private-user" not in str(ai.calls)
 
 
+def test_default_prompt_describes_lively_and_friendly_assistant():
+    ai = FakeAIClient()
+    service = AiReplyService(ai)
+    event = MessageEvent(user="alice", message={"type": "文本", "content": "你好"})
+
+    service.generate_reply(event)
+
+    prompt = ai.calls[0][0]["content"]
+    assert "活泼开朗" in prompt
+    assert "热情友善" in prompt
+    assert "不要主动提及自己是 AI" in prompt
+
+
 def test_ignores_empty_message_without_calling_ai():
     ai = FakeAIClient()
     service = AiReplyService(ai)
