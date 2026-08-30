@@ -24,7 +24,7 @@ def build_runtime(
 ) -> tuple[MessageListener, ApprovalQueue]:
     reader = MessageReader(db, users=users)
     store = JsonWatermarkStore(watermark_path)
-    sender = WeChatUISender(send_func=send_func)
+    sender = WeChatUISender(send_func=send_func, name_resolver=getattr(db, "get_nickname", None))
     queue = ApprovalQueue(sender)
     runtime = BotRuntime(reply_service, queue)
     listener = MessageListener(reader, store, runtime.handle_event, interval=interval)

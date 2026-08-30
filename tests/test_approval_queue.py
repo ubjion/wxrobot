@@ -117,3 +117,20 @@ def test_wechat_sender_passes_text_to_reference_ui_adapter():
 
     assert result is True
     assert calls == [("回复内容", "alice", True)]
+
+
+def test_wechat_sender_resolves_display_name_before_search():
+    calls = []
+
+    def fake_quick_send(text, who, verify):
+        calls.append((text, who, verify))
+        return True
+
+    sender = WeChatUISender(
+        send_func=fake_quick_send,
+        name_resolver=lambda user: "联系人名称",
+    )
+
+    sender.send("wxid_example", "回复内容")
+
+    assert calls == [("回复内容", "联系人名称", True)]
