@@ -11,7 +11,7 @@ from app.messages.reader import JsonWatermarkStore, MessageListener, MessageRead
 from app.services.approval_queue import ApprovalQueue
 from app.services.bot_runtime import BotRuntime
 from app.services.reply_service import AiReplyService
-from app.services.wechat_sender import WeChatUISender
+from app.services.wechat_sender import WeChatSendError, WeChatUISender
 
 
 def build_runtime(
@@ -34,6 +34,13 @@ def build_runtime(
 def _default_watermark_path() -> Path:
     root = Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
     return root / "wx-bot" / "watermarks.json"
+
+
+def approve_for_console(queue: ApprovalQueue, token: str) -> str:
+    try:
+        return "已发送" if queue.approve(token) else "未找到该回复"
+    except WeChatSendError as exc:
+        return f"发送失败，回复仍保留：{exc}"
 
 
 def main() -> None:
@@ -69,7 +76,7 @@ def main() -> None:
                 for pending in queue.list_pending():
                     print(f"{pending.token}: {pending.event.user} <- {pending.text}")
             elif command[0] == "approve" and len(command) == 2:
-                print("已发送" if queue.approve(command[1]) else "未找到该回复")
+                print(approve_for_console(queue, command[1]))
             elif command[0] == "reject" and len(command) == 2:
                 print("已丢弃" if queue.reject(command[1]) else "未找到该回复")
             else:

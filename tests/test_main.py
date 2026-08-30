@@ -1,4 +1,6 @@
 from app.main import build_runtime
+from app.main import approve_for_console
+from app.services.wechat_sender import WeChatSendError
 
 
 class FakeDB:
@@ -23,3 +25,13 @@ def test_build_runtime_wires_reading_ai_approval_and_sending(tmp_path):
     assert listener.reader.users == ("alice",)
     assert listener.callback.__self__.reply_service is not None
     assert queue.list_pending() == []
+
+
+def test_approve_for_console_keeps_running_when_ui_send_fails():
+    class FailingQueue:
+        def approve(self, token):
+            raise WeChatSendError("微信窗口不可见")
+
+    result = approve_for_console(FailingQueue(), "reply-1")
+
+    assert result.startswith("发送失败，回复仍保留")
