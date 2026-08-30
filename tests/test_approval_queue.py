@@ -2,7 +2,11 @@ import pytest
 
 from app.messages.reader import MessageEvent
 from app.services.approval_queue import ApprovalQueue, PendingReply
-from app.services.wechat_sender import WeChatSendError, WeChatUISender
+from app.services.wechat_sender import (
+    WeChatSendError,
+    WeChatUISender,
+    screen_has_content,
+)
 
 
 class FakeSender:
@@ -70,6 +74,34 @@ def test_wechat_sender_treats_failure_response_as_send_failure():
 
     with pytest.raises(WeChatSendError, match="未确认"):
         sender.send("alice", "回复内容")
+
+
+def test_dark_theme_window_counts_as_visible_content():
+    class FakeImage:
+        size = (32, 32)
+
+        def load(self):
+            return self
+
+        def __getitem__(self, position):
+            return (220, 220, 220) if position == (0, 0) else (38, 38, 38)
+
+    dark_window = FakeImage()
+
+    assert screen_has_content(dark_window) is True
+
+
+def test_black_window_is_not_visible_content():
+    class BlackImage:
+        size = (32, 32)
+
+        def load(self):
+            return self
+
+        def __getitem__(self, position):
+            return (0, 0, 0)
+
+    assert screen_has_content(BlackImage()) is False
 
 
 def test_wechat_sender_passes_text_to_reference_ui_adapter():
