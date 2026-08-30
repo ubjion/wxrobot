@@ -8,7 +8,7 @@
 - 人工确认队列；
 - 通过参考项目的 UI 适配器发送文本。
 
-当前默认是人工确认模式，不会自动发送消息。
+当前默认是自动回复模式；可设置 `WX_BOT_SEND_MODE=manual` 切换为人工确认。
 
 ## 环境要求
 
@@ -31,6 +31,7 @@ python -m pip install -r requirements.txt
 - `DEEPSEEK_MODEL`：DeepSeek 模型名；
 - `WX_BOT_POLL_INTERVAL`：消息轮询间隔，默认 1 秒；
 - `WX_BOT_WATERMARK_FILE`：游标文件路径。
+- `WX_BOT_SEND_MODE`：`auto` 自动回复，或 `manual` 人工确认，默认 `auto`。
 
 ## 启动
 
@@ -53,4 +54,5 @@ python -m app.main
 - 不实现批量群发、自动加好友或自动拉群；
 - 默认不保存完整聊天正文；
 - API Key 仅通过环境变量读取；
-- AI 回复不会自动发送，必须人工批准。
+- 自动模式仅处理监听会话收到的新消息，不处理机器人自己发送的消息。
+- 手动模式下，AI 回复必须执行 `approve <token>` 才会发送。

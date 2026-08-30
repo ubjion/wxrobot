@@ -21,12 +21,13 @@ def build_runtime(
     watermark_path: str | os.PathLike[str],
     send_func: Callable[..., Any] | None = None,
     interval: float = 1.0,
+    auto_send: bool = False,
 ) -> tuple[MessageListener, ApprovalQueue]:
     reader = MessageReader(db, users=users)
     store = JsonWatermarkStore(watermark_path)
     sender = WeChatUISender(send_func=send_func, name_resolver=getattr(db, "get_nickname", None))
     queue = ApprovalQueue(sender)
-    runtime = BotRuntime(reply_service, queue)
+    runtime = BotRuntime(reply_service, queue, auto_send=auto_send)
     listener = MessageListener(reader, store, runtime.handle_event, interval=interval)
     return listener, queue
 
@@ -54,15 +55,19 @@ def main() -> None:
     config = DeepSeekConfig.from_env()
     ai_service = AiReplyService(DeepSeekClient(config))
     interval = float(os.getenv("WX_BOT_POLL_INTERVAL", "1.0"))
+    send_mode = os.getenv("WX_BOT_SEND_MODE", "auto").strip().lower()
+    if send_mode not in {"auto", "manual"}:
+        raise ValueError("WX_BOT_SEND_MODE 必须是 auto 或 manual")
     listener, queue = build_runtime(
         db=db,
         users=users,
         reply_service=ai_service,
         watermark_path=os.getenv("WX_BOT_WATERMARK_FILE", str(_default_watermark_path())),
         interval=interval,
+        auto_send=send_mode == "auto",
     )
     listener.start()
-    print("微信机器人已启动（人工确认模式）。输入 help 查看命令，输入 quit 退出。")
+    print(f"微信机器人已启动（{send_mode} 模式）。输入 help 查看命令，输入 quit 退出。")
     try:
         while True:
             command = input("wx-bot> ").strip().split(maxsplit=1)

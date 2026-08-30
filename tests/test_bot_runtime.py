@@ -42,3 +42,33 @@ def test_runtime_ignores_events_without_reply():
         MessageEvent(user="alice", message={"type": "图片", "content": ""})
     ) is None
     assert queue.calls == []
+
+
+def test_runtime_auto_mode_approves_reply_immediately():
+    class AutoQueue(FakeQueue):
+        def __init__(self):
+            super().__init__()
+            self.approved = []
+
+        def approve(self, token):
+            self.approved.append(token)
+            return True
+
+    queue = AutoQueue()
+    runtime = BotRuntime(FakeAI(), queue, auto_send=True)
+    event = MessageEvent(user="alice", message={"type": "文本", "content": "你好"})
+
+    assert runtime.handle_event(event) == "reply-1"
+    assert queue.approved == ["reply-1"]
+
+
+def test_runtime_ignores_messages_sent_by_self():
+    queue = FakeQueue()
+    runtime = BotRuntime(FakeAI(), queue, auto_send=True)
+    event = MessageEvent(
+        user="alice",
+        message={"type": "文本", "content": "自己的消息", "sender_id": 2},
+    )
+
+    assert runtime.handle_event(event) is None
+    assert queue.calls == []
