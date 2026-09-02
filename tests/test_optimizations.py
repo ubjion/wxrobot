@@ -58,7 +58,7 @@ def test_knowledge_and_web_search_run_in_parallel():
 
     service = AiReplyService(AI(), knowledge_base=Knowledge(), search_client=Web())
     assert service.generate_reply(
-        MessageEvent(user="alice", message={"type": "文本", "content": "问题"})
+        MessageEvent(user="alice", message={"type": "文本", "content": "最新问题"})
     ) == "回答"
 
     assert peak == 2

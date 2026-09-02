@@ -1,3 +1,5 @@
+import pytest
+
 from app.ai.deepseek import DeepSeekError
 from app.messages.reader import MessageEvent
 from app.services.reply_service import AiReplyService
@@ -209,8 +211,8 @@ def test_search_question_uses_web_search_results_before_ai():
     assert "https://example.com" in ai.calls[0][-1]["content"]
 
 
-def test_every_text_question_searches_before_ai():
-    ai = FakeAIClient(result="基于最新资料的回答")
+def test_stable_knowledge_question_skips_web_search():
+    ai = FakeAIClient(result="直接回答")
     searched = []
 
     class FakeSearch:
@@ -224,9 +226,37 @@ def test_every_text_question_searches_before_ai():
         MessageEvent(user="alice", message={"type": "文本", "content": "牛顿是谁"})
     )
 
-    assert result == "基于最新资料的回答"
-    assert searched == ["牛顿是谁"]
-    assert "资料标题" in ai.calls[0][-1]["content"]
+    assert result == "直接回答"
+    assert searched == []
+    assert "资料标题" not in ai.calls[0][-1]["content"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "请搜索量子计算",
+        "最新AI进展",
+        "今天有什么新闻",
+        "OpenAI官网",
+        "黄金价格",
+        "实时汇率",
+    ],
+)
+def test_current_or_explicit_query_triggers_web_search(query):
+    searched = []
+
+    class FakeSearch:
+        def search(self, value):
+            searched.append(value)
+            return [SearchResult("当前资料", "https://example.com", "摘要")]
+
+    service = AiReplyService(FakeAIClient(), search_client=FakeSearch())
+
+    service.generate_reply(
+        MessageEvent(user="alice", message={"type": "文本", "content": query})
+    )
+
+    assert searched == [query]
 
 
 def test_search_failure_does_not_fall_back_to_hallucinated_ai_answer():

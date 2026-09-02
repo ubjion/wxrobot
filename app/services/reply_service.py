@@ -193,7 +193,33 @@ class AiReplyService:
 
     @staticmethod
     def _is_search_query(content: str) -> bool:
-        return bool(content.strip())
+        normalized = content.strip().lower()
+        if not normalized:
+            return False
+        explicit_markers = (
+            "搜索",
+            "搜一下",
+            "搜一搜",
+            "查找",
+            "查一下",
+            "官网",
+            "网址",
+            "链接",
+        )
+        freshness_markers = (
+            "最新",
+            "最近",
+            "今天",
+            "当前",
+            "现在",
+            "实时",
+            "新闻",
+            "资讯",
+            "价格",
+            "汇率",
+            "行情",
+        )
+        return any(marker in normalized for marker in (*explicit_markers, *freshness_markers))
 
     def _knowledge_context(self, event: MessageEvent, content: str) -> str:
         if self.knowledge_base is None:
