@@ -17,19 +17,22 @@ class GroupSummaryService:
         self.ai_client = ai_client
         self.max_messages = max_messages
         self.system_prompt = system_prompt or load_system_prompt()
-        self._name_resolver = getattr(db, "get_nickname", None)
 
     def summarize(self, group_id: str) -> str:
         rows = self.db.get_messages(group_id, limit=self.max_messages) or []
         messages = []
         counts = Counter()
+        aliases: dict[str, str] = {}
         for row in reversed(rows):
             if row.get("type") in {1, "文本", "text"} and isinstance(row.get("content"), str):
                 original = row["content"].strip()
-                content = self._replace_user_ids(original)
+                sender_id, content = self._extract_sender(original, row)
                 if content:
-                    counts[self._sender_label(original, row)] += 1
-                    messages.append(content)
+                    label = aliases.setdefault(
+                        sender_id, f"成员{len(aliases) + 1}"
+                    )
+                    counts[label] += 1
+                    messages.append(f"{label}：{content}")
         if not messages:
             return "当前群聊暂无可总结的文本消息。"
         statistics = "人员消息统计：\n" + "\n".join(
@@ -48,31 +51,16 @@ class GroupSummaryService:
         ])
         return statistics + "\n\n" + summary
 
-    def _replace_user_ids(self, content: str) -> str:
-        if self._name_resolver is None:
-            return content
-
-        def replace(match: re.Match[str]) -> str:
-            user_id = match.group(0)
-            try:
-                name = self._name_resolver(user_id)
-            except Exception:
-                return user_id
-            return name.strip() if isinstance(name, str) and name.strip() else user_id
-
-        return re.sub(r"wxid_[A-Za-z0-9]+", replace, content)
-
-    def _sender_label(self, content: str, row: dict) -> str:
-        match = re.match(r"^(wxid_[A-Za-z0-9]+):", content)
+    @staticmethod
+    def _extract_sender(content: str, row: dict) -> tuple[str, str]:
+        match = re.match(
+            r"^(wxid_[A-Za-z0-9]+):\s*(?:\r?\n)?(.*)$",
+            content,
+            re.DOTALL,
+        )
         if match:
-            user_id = match.group(1)
-            if self._name_resolver is not None:
-                try:
-                    name = self._name_resolver(user_id)
-                    if isinstance(name, str) and name.strip():
-                        return name.strip()
-                except Exception:
-                    pass
-            return user_id
+            return match.group(1), match.group(2).strip()
         sender_id = row.get("sender_id")
-        return f"成员{sender_id}" if sender_id is not None else "未知成员"
+        body = re.sub(r"^[^\s：:\n]{1,32}[：:]\s*", "", content, count=1)
+        identity = f"sender:{sender_id}" if sender_id is not None else "unknown"
+        return identity, body.strip()

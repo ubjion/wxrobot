@@ -68,7 +68,7 @@ def test_runtime_routes_group_summary_command_to_summary_service():
     assert queue.calls[0][1] == "群聊总结内容"
 
 
-def test_group_summary_replaces_wxid_with_display_name():
+def test_group_summary_replaces_identity_with_anonymous_member_label():
     class ContactDB(FakeDB):
         def get_nickname(self, user):
             return {"wxid_sender": "小明"}.get(user, user)
@@ -80,7 +80,8 @@ def test_group_summary_replaces_wxid_with_display_name():
 
     prompt = ai.calls[0][-1]["content"]
     assert "wxid_sender" not in prompt
-    assert "小明" in prompt
+    assert "小明" not in prompt
+    assert "成员" in prompt
 
 
 def test_group_summary_includes_message_count_by_person():
@@ -98,9 +99,13 @@ def test_group_summary_includes_message_count_by_person():
     ai = FakeAI()
     service = GroupSummaryService(ContactDB(), ai)
 
-    result = service.summarize("123@chatroom")
+    service.summarize("123@chatroom")
+    prompt = ai.calls[0][-1]["content"]
 
-    assert "人员消息统计" in result
-    assert "小明：2 条" in result
-    assert "小红：1 条" in result
-    assert "人员消息统计" in ai.calls[0][-1]["content"]
+    assert "人员消息统计" in prompt
+    assert "小明" not in prompt
+    assert "小红" not in prompt
+    assert "成员1：1 条" in prompt
+    assert "成员2：2 条" in prompt
+    assert "wxid_sender" not in prompt
+    assert "wxid_other" not in prompt
