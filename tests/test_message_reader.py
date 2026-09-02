@@ -67,6 +67,72 @@ def test_poll_once_keeps_watermark_when_database_read_fails():
     assert reader.watermarks == {"alice": 7}
 
 
+def test_poll_once_discovers_new_user_without_replaying_history():
+    class DynamicDB(FakeDB):
+        def get_messages(self, user, limit):
+            return [{"local_id": 99, "sort_seq": 100, "content": "历史消息"}]
+
+    users = ["alice"]
+
+    def discover_users():
+        return users
+
+    db = DynamicDB({"alice": []})
+    reader = MessageReader(db, users=[], user_provider=discover_users)
+
+    first = reader.poll_once()
+    users.append("new-group@chatroom")
+    db.messages_by_user["new-group@chatroom"] = [
+        {"local_id": 99, "sort_seq": 100, "content": "历史消息"},
+        {"local_id": 100, "sort_seq": 101, "content": "新消息"},
+    ]
+    second = reader.poll_once()
+
+    assert first == []
+    assert [event.message["sort_seq"] for event in second] == [101]
+    assert "new-group@chatroom" in reader.users
+
+
+def test_seed_missing_watermarks_skips_history_on_first_start():
+    class HistoricalDB(FakeDB):
+        def get_messages(self, user, limit):
+            return [{"local_id": 9, "sort_seq": 100, "content": "历史消息"}]
+
+    db = HistoricalDB({"alice": [{"local_id": 10, "sort_seq": 101, "content": "新消息"}]})
+    reader = MessageReader(db, users=["alice"])
+
+    reader.seed_missing_watermarks()
+
+    assert reader.watermarks == {"alice": 100}
+    assert [event.message["sort_seq"] for event in reader.poll_once()] == [101]
+
+
+def test_listener_resets_existing_watermark_to_latest_on_restart(tmp_path):
+    class HistoricalDB(FakeDB):
+        def get_messages(self, user, limit):
+            return [{"local_id": 9, "sort_seq": 100, "content": "最新历史消息"}]
+
+    store = JsonWatermarkStore(tmp_path / "watermarks.json")
+    store.save({"alice": 50})
+    reader = MessageReader(HistoricalDB({"alice": []}), users=["alice"])
+
+    MessageListener(reader, store, lambda event: None)
+
+    assert reader.watermarks == {"alice": 100}
+    assert store.load() == {"alice": 100}
+
+
+def test_rewind_event_allows_failed_message_to_be_retried():
+    db = FakeDB({"alice": [{"local_id": 1, "sort_seq": 10, "content": "重试"}]})
+    reader = MessageReader(db, users=["alice"])
+    event = reader.poll_once()[0]
+
+    reader.rewind_event(event)
+
+    retried = reader.poll_once()
+    assert [item.message["sort_seq"] for item in retried] == [10]
+
+
 def test_watermark_store_round_trips_values(tmp_path):
     path = tmp_path / "watermarks.json"
     store = JsonWatermarkStore(path)

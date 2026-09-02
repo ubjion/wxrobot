@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import logging
 
 import pytest
 
@@ -23,7 +24,7 @@ class FakeSDKClient:
         self.chat = SimpleNamespace(completions=completions)
 
 
-def test_complete_returns_assistant_content_and_sends_configured_request():
+def test_complete_returns_assistant_content_and_sends_configured_request(caplog):
     completions = FakeCompletions(
         SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="你好"))]
@@ -33,10 +34,12 @@ def test_complete_returns_assistant_content_and_sends_configured_request():
         DeepSeekConfig(api_key="test-key", model="deepseek-v4-flash"),
         sdk_client=FakeSDKClient(completions),
     )
+    caplog.set_level(logging.INFO, logger="wx-bot")
 
     result = client.complete([{"role": "user", "content": "你好"}])
 
     assert result == "你好"
+    assert "DeepSeek 请求耗时" in caplog.text
     assert completions.calls == [
         {
             "model": "deepseek-v4-flash",

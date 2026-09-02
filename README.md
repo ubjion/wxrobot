@@ -5,10 +5,28 @@
 - 只读读取微信 4.x 加密数据库；
 - 增量消息监听与游标持久化；
 - DeepSeek 文本回复生成；
+- Open-Meteo 实时天气查询；
+- Firecrawl 通用联网搜索；
 - 人工确认队列；
 - 通过参考项目的 UI 适配器发送文本。
 
 当前默认是自动回复模式；可设置 `WX_BOT_SEND_MODE=manual` 切换为人工确认。
+
+天气问题会直接调用 Open-Meteo 查询，不需要额外 API Key。例如：
+
+```text
+今天宁波天气如何
+北京现在会下雨吗
+```
+
+所有普通文本问题都会先进行联网搜索，再交给 DeepSeek 组织回答。通用联网搜索需要配置 `FIRECRAWL_API_KEY`。例如：
+
+```text
+请搜索最新的宁波新闻
+帮我查一下这个产品的官网
+```
+
+未配置搜索 Key 时，机器人会明确提示联网搜索不可用，不会编造搜索结果。
 
 ## 环境要求
 
@@ -32,6 +50,15 @@ python -m pip install -r requirements.txt
 - `WX_BOT_POLL_INTERVAL`：消息轮询间隔，默认 1 秒；
 - `WX_BOT_WATERMARK_FILE`：游标文件路径。
 - `WX_BOT_SEND_MODE`：`auto` 自动回复，或 `manual` 人工确认，默认 `auto`。
+- `WX_BOT_FALLBACK_REPLY`：AI 请求失败时的兜底回复文本。
+- `WX_BOT_CONTEXT_MESSAGES`：每个用户保留的最近上下文消息数，默认 20；
+- `WX_BOT_CONTEXT_FILE`：按用户 ID 保存上下文的 JSON 文件路径。
+- `WX_BOT_KNOWLEDGE_DIR`：本地知识文档目录，默认项目下的 `knowledge/`。
+- `WX_BOT_KNOWLEDGE_DB`：知识库索引文件路径，默认 `%LOCALAPPDATA%\wx-bot\knowledge.sqlite`。
+- `WX_BOT_SUMMARY_MESSAGES`：群聊总结读取的最近文本消息数，默认 50。
+- `WX_BOT_PROMPT_FILE`：AI 系统提示词文档路径，默认 `prompts/assistant_system.md`。
+- `WX_BOT_SCHEDULE_FILE`：定时发送任务 JSON 文件路径。
+- `WX_BOT_GROUP_NAMES`：机器人在群里的昵称，多个昵称用英文逗号分隔。
 
 ## 启动
 
@@ -46,6 +73,34 @@ python -m app.main
 - `reject <token>`：丢弃回复；
 - `quit`：停止程序。
 
+定时发送命令：
+
+- 在微信中向机器人发送 `/定时 <ISO时间> <内容>`，创建给自己的单次任务；
+- 在微信中向机器人发送 `/每 <秒数> <内容>`，创建给自己的周期任务；
+- `schedule once <用户ID> <ISO时间> <内容>`：创建一次性任务；
+- `schedule every <用户ID> <秒数> <内容>`：创建周期任务；
+- `schedules`：查看任务；
+- `cancel <任务ID>`：取消任务。
+
+微信命令示例：
+
+```text
+/定时 2026-08-30T20:30:00+08:00 晚上好
+/定时 21:40发送你好
+/定时 21:40 发送你好
+/每 86400 早上好
+```
+
+群聊总结：
+
+```text
+@机器人 总结最近群聊
+```
+
+`HH:MM` 时间格式按本机时区执行；如果当天该时间已经过去，则自动安排到次日。
+
+微信内创建的任务只能发送给命令发起者本人；控制台命令可用于管理员维护已存在的任务。
+
 首次使用建议先在测试会话中验证。数据库读取、AI 生成和 UI 发送均可能受微信版本、桌面锁定状态和本地权限影响。
 
 ## 安全边界
@@ -55,4 +110,8 @@ python -m app.main
 - 默认不保存完整聊天正文；
 - API Key 仅通过环境变量读取；
 - 自动模式仅处理监听会话收到的新消息，不处理机器人自己发送的消息。
+- 群聊仅处理明确 @ 机器人昵称或 `@我` 的消息，普通群消息不会触发回复。
+- 群聊回复使用普通文本发送，不使用引用回复。
+- 对授权用户的群聊 @ 消息，若 @ 后紧跟 `，` 或 `,`，直接复述逗号后的内容；否则交给 AI 生成回复。
 - 手动模式下，AI 回复必须执行 `approve <token>` 才会发送。
+- 上下文按用户 ID 隔离保存，默认保存在本机 `contexts.json`，不提交到 Git。

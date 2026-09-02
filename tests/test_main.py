@@ -1,4 +1,4 @@
-from app.main import build_runtime
+from app.main import build_runtime, get_bot_names
 from app.main import approve_for_console
 from app.services.wechat_sender import WeChatSendError
 
@@ -35,3 +35,12 @@ def test_approve_for_console_keeps_running_when_ui_send_fails():
     result = approve_for_console(FailingQueue(), "reply-1")
 
     assert result.startswith("发送失败，回复仍保留")
+
+
+def test_bot_names_include_configured_group_aliases():
+    names = get_bot_names(
+        {"nick_name": "王霸", "remark": "", "username": "wxid_bot"},
+        "你们的爸(严作吴版),机器人别名",
+    )
+
+    assert names == {"王霸", "wxid_bot", "你们的爸(严作吴版)", "机器人别名"}

@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
+import time
 from typing import Any, Mapping, Sequence
+
+
+logger = logging.getLogger("wx-bot")
 
 
 class DeepSeekError(RuntimeError):
@@ -53,12 +58,14 @@ class DeepSeekClient:
             api_key=config.api_key,
             base_url=config.base_url,
             timeout=config.timeout,
+            max_retries=0,
         )
 
     def complete(self, messages: Sequence[Mapping[str, str]]) -> str:
         if not messages:
             raise ValueError("messages 不能为空")
         payload = [dict(message) for message in messages]
+        started = time.perf_counter()
         try:
             response = self._client.chat.completions.create(
                 model=self.config.model,
@@ -67,7 +74,9 @@ class DeepSeekClient:
                 temperature=self.config.temperature,
             )
         except Exception as exc:
+            logger.warning("DeepSeek 请求失败，耗时 %.2f 秒", time.perf_counter() - started)
             raise DeepSeekError(f"DeepSeek 请求失败：{type(exc).__name__}") from exc
+        logger.info("DeepSeek 请求耗时 %.2f 秒", time.perf_counter() - started)
 
         try:
             content = response.choices[0].message.content

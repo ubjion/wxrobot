@@ -19,6 +19,11 @@ class FakeSender:
         if self.error:
             raise self.error
 
+    def reply(self, user, text):
+        self.calls.append(("reply", user, text))
+        if self.error:
+            raise self.error
+
 
 def make_event():
     return MessageEvent(user="alice", message={"type": "文本", "content": "你好"})
@@ -134,3 +139,58 @@ def test_wechat_sender_resolves_display_name_before_search():
     sender.send("wxid_example", "回复内容")
 
     assert calls == [("回复内容", "联系人名称", True)]
+
+
+def test_group_approval_uses_normal_send_and_private_approval_uses_send():
+    sender = FakeSender()
+    queue = ApprovalQueue(sender)
+    group_event = MessageEvent(user="room@chatroom", message={"type": "文本", "content": "群问题"})
+    private_event = MessageEvent(user="alice", message={"type": "文本", "content": "私聊问题"})
+
+    group_token = queue.enqueue(group_event, "群回复")
+    private_token = queue.enqueue(private_event, "私聊回复")
+
+    queue.approve(group_token)
+    queue.approve(private_token)
+
+    assert sender.calls == [
+        ("room@chatroom", "群回复"),
+        ("alice", "私聊回复"),
+    ]
+
+
+def test_wechat_sender_can_call_quote_reply_adapter():
+    calls = []
+
+    def fake_quick_reply(text, who, verify):
+        calls.append((text, who, verify))
+        return True
+
+    sender = WeChatUISender(reply_func=fake_quick_reply)
+
+    assert sender.reply("room@chatroom", "引用内容") is True
+    assert calls == [("引用内容", "room@chatroom", True)]
+
+
+def test_quote_failure_falls_back_to_normal_send_when_not_executed():
+    calls = []
+
+    class FailureResponse(dict):
+        def __bool__(self):
+            return False
+
+    def fake_quick_reply(text, who, verify):
+        calls.append(("quote", text, who, verify))
+        return FailureResponse(status="失败", message="未找到回复入口")
+
+    def fake_send(text, who, verify):
+        calls.append(("send", text, who, verify))
+        return True
+
+    sender = WeChatUISender(send_func=fake_send, reply_func=fake_quick_reply)
+
+    assert sender.reply("room@chatroom", "普通发送兜底") is True
+    assert calls == [
+        ("quote", "普通发送兜底", "room@chatroom", True),
+        ("send", "普通发送兜底", "room@chatroom", True),
+    ]

@@ -28,14 +28,17 @@ class MessageReader:
         db: Any,
         users: Iterable[str],
         watermarks: MutableMapping[str, int] | None = None,
+        user_provider: Any | None = None,
     ) -> None:
         self.db = db
         self.users = tuple(dict.fromkeys(users))
         self.watermarks: Dict[str, int] = dict(watermarks or {})
+        self.user_provider = user_provider
         self._seen: Set[Tuple[str, str, Any]] = set()
 
     def poll_once(self) -> List[MessageEvent]:
         """读取所有监听会话的新消息；单个会话失败不会推进其游标。"""
+        self.refresh_users()
         events: List[MessageEvent] = []
         for user in self.users:
             since_seq = self.watermarks.get(user, 0)
@@ -59,6 +62,48 @@ class MessageReader:
 
             self.watermarks[user] = next_seq
         return events
+
+    def refresh_users(self) -> None:
+        if self.user_provider is None:
+            return
+        try:
+            discovered = tuple(dict.fromkeys(self.user_provider()))
+        except Exception:
+            return
+        self.users = tuple(dict.fromkeys((*self.users, *discovered)))
+        self.seed_missing_watermarks(discovered)
+
+    def seed_missing_watermarks(self, users: Iterable[str] | None = None) -> None:
+        for user in users or self.users:
+            if user in self.watermarks:
+                continue
+            try:
+                latest = self.db.get_messages(user, limit=1) or []
+                if latest:
+                    self.watermarks[user] = max(
+                        int(item.get("sort_seq", 0)) for item in latest
+                    )
+            except Exception:
+                continue
+
+    def reset_watermarks_to_latest(self, users: Iterable[str] | None = None) -> None:
+        for user in users or self.users:
+            try:
+                latest = self.db.get_messages(user, limit=1) or []
+                if latest:
+                    self.watermarks[user] = max(
+                        int(item.get("sort_seq", 0)) for item in latest
+                    )
+            except Exception:
+                continue
+
+    def rewind_event(self, event: MessageEvent) -> None:
+        sort_seq = int(event.message.get("sort_seq", 0))
+        if sort_seq <= 0:
+            return
+        current = self.watermarks.get(event.user, sort_seq)
+        self.watermarks[event.user] = min(current, sort_seq - 1)
+        self._seen = {key for key in self._seen if key[0] != event.user}
 
     @staticmethod
     def _identity(user: str, message: Mapping[str, Any]) -> Tuple[str, str, Any]:
@@ -117,6 +162,7 @@ class MessageListener:
         store: JsonWatermarkStore,
         callback: Any,
         interval: float = 1.0,
+        error_handler: Any | None = None,
     ) -> None:
         if interval <= 0:
             raise ValueError("interval must be positive")
@@ -124,9 +170,12 @@ class MessageListener:
         self.store = store
         self.callback = callback
         self.interval = interval
+        self.error_handler = error_handler
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self.reader.watermarks.update(self.store.load())
+        self.reader.reset_watermarks_to_latest()
+        self.store.save(self.reader.watermarks)
 
     @property
     def is_running(self) -> bool:
@@ -153,10 +202,16 @@ class MessageListener:
     def _run(self) -> None:
         while not self._stop_event.is_set():
             events = self.reader.poll_once()
-            self.store.save(self.reader.watermarks)
             for event in events:
                 try:
                     self.callback(event)
                 except Exception:
-                    continue
+                    self.reader.rewind_event(event)
+                    if self.error_handler is not None:
+                        try:
+                            self.error_handler(event)
+                        except Exception:
+                            pass
+                    break
+            self.store.save(self.reader.watermarks)
             self._stop_event.wait(self.interval)

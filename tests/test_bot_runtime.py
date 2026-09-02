@@ -72,3 +72,44 @@ def test_runtime_ignores_messages_sent_by_self():
 
     assert runtime.handle_event(event) is None
     assert queue.calls == []
+
+
+def test_runtime_ignores_group_message_without_bot_mention():
+    queue = FakeQueue()
+    runtime = BotRuntime(FakeAI(), queue, bot_names={"机器人"})
+    event = MessageEvent(
+        user="123@chatroom",
+        message={"type": "文本", "content": "大家今天几点开会"},
+    )
+
+    assert runtime.handle_event(event) is None
+    assert queue.calls == []
+
+
+def test_runtime_replies_when_group_message_mentions_bot_name():
+    queue = FakeQueue()
+    runtime = BotRuntime(FakeAI(), queue, bot_names={"机器人"})
+    event = MessageEvent(
+        user="123@chatroom",
+        message={"type": "文本", "content": "@机器人 请总结一下"},
+    )
+
+    assert runtime.handle_event(event) == "reply-1"
+    assert len(queue.calls) == 1
+
+
+def test_runtime_uses_fallback_reply_when_ai_fails():
+    class FailingAI:
+        def generate_reply(self, event):
+            raise RuntimeError("AI unavailable")
+
+    queue = FakeQueue()
+    runtime = BotRuntime(
+        FailingAI(),
+        queue,
+        fallback_reply="我收到啦，AI 暂时不可用，请稍后再试。",
+    )
+    event = MessageEvent(user="alice", message={"type": "文本", "content": "你好"})
+
+    assert runtime.handle_event(event) == "reply-1"
+    assert queue.calls[0][1] == "我收到啦，AI 暂时不可用，请稍后再试。"
