@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import threading
 import time
 
 from app.services.scheduler import JsonScheduleStore, MessageScheduler, ScheduledMessage
@@ -95,3 +96,56 @@ def test_scheduler_background_thread_sends_due_task_and_stops(tmp_path):
 
     assert sender.calls == [("alice", "后台任务")]
     assert scheduler.is_running is False
+
+
+def test_cancel_during_send_does_not_resurrect_recurring_schedule():
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingSender(FakeSender):
+        def send(self, user, text):
+            self.calls.append((user, text))
+            started.set()
+            release.wait(timeout=1)
+            return True
+
+    now = datetime(2030, 1, 1, 8, 0, tzinfo=timezone.utc)
+    scheduler = MessageScheduler(BlockingSender(), clock=lambda: now)
+    schedule_id = scheduler.add_interval("alice", "循环任务", 60, start_at=now)
+    worker = threading.Thread(target=scheduler.run_once)
+
+    worker.start()
+    assert started.wait(timeout=1)
+    assert scheduler.cancel(schedule_id) is True
+    release.set()
+    worker.join(timeout=1)
+
+    assert scheduler.list_schedules() == []
+
+
+def test_concurrent_run_once_claims_due_schedule_only_once():
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingSender(FakeSender):
+        def send(self, user, text):
+            self.calls.append((user, text))
+            started.set()
+            release.wait(timeout=1)
+            return True
+
+    sender = BlockingSender()
+    now = datetime(2030, 1, 1, 8, 0, tzinfo=timezone.utc)
+    scheduler = MessageScheduler(sender, clock=lambda: now)
+    scheduler.add_once("alice", "只发一次", now)
+    first = threading.Thread(target=scheduler.run_once)
+    second = threading.Thread(target=scheduler.run_once)
+
+    first.start()
+    assert started.wait(timeout=1)
+    second.start()
+    second.join(timeout=1)
+    release.set()
+    first.join(timeout=1)
+
+    assert sender.calls == [("alice", "只发一次")]

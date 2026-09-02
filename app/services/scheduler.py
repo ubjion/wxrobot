@@ -92,7 +92,9 @@ class MessageScheduler:
         self.sender = sender
         self.store = store
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self._lock = threading.RLock()
         self._schedules = store.load() if store else []
+        self._in_flight: set[str] = set()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         for schedule in self._schedules:
@@ -127,35 +129,44 @@ class MessageScheduler:
             interval_seconds=interval_seconds,
         )
         _validate_schedule(schedule)
-        self._schedules.append(schedule)
-        self._save()
+        with self._lock:
+            self._schedules.append(schedule)
+            self._save()
         return schedule.id
 
     def list_schedules(self) -> List[ScheduledMessage]:
-        return list(self._schedules)
+        with self._lock:
+            return list(self._schedules)
 
     def cancel(self, schedule_id: str) -> bool:
-        old_size = len(self._schedules)
-        self._schedules = [item for item in self._schedules if item.id != schedule_id]
-        if len(self._schedules) != old_size:
-            self._save()
-            return True
-        return False
+        with self._lock:
+            old_size = len(self._schedules)
+            self._schedules = [item for item in self._schedules if item.id != schedule_id]
+            if len(self._schedules) != old_size:
+                self._save()
+                return True
+            return False
 
     def run_once(self) -> int:
         now = self.clock()
+        with self._lock:
+            due = [
+                schedule
+                for schedule in self._schedules
+                if schedule.id not in self._in_flight
+                and _parse_time(schedule.next_run) <= now
+            ]
+            self._in_flight.update(schedule.id for schedule in due)
+
         sent = 0
-        remaining: List[ScheduledMessage] = []
-        for schedule in self._schedules:
-            if _parse_time(schedule.next_run) > now:
-                remaining.append(schedule)
-                continue
+        completed: dict[str, ScheduledMessage | None] = {}
+        for schedule in due:
             try:
                 result = self.sender.send(schedule.user_id, schedule.text)
                 if result is False:
                     raise RuntimeError("scheduled send failed")
             except Exception:
-                remaining.append(schedule)
+                completed[schedule.id] = schedule
                 continue
             sent += 1
             if schedule.interval_seconds is not None:
@@ -163,9 +174,28 @@ class MessageScheduler:
                 step = timedelta(seconds=schedule.interval_seconds)
                 while next_run <= now:
                     next_run += step
-                remaining.append(replace(schedule, next_run=next_run.isoformat()))
-        self._schedules = remaining
-        self._save()
+                completed[schedule.id] = replace(
+                    schedule, next_run=next_run.isoformat()
+                )
+            else:
+                completed[schedule.id] = None
+
+        with self._lock:
+            current = {schedule.id: schedule for schedule in self._schedules}
+            for schedule_id, replacement in completed.items():
+                if schedule_id not in current:
+                    continue
+                if replacement is None:
+                    del current[schedule_id]
+                else:
+                    current[schedule_id] = replacement
+            self._schedules = [
+                current[schedule.id]
+                for schedule in self._schedules
+                if schedule.id in current
+            ]
+            self._in_flight.difference_update(schedule.id for schedule in due)
+            self._save()
         return sent
 
     @property
@@ -199,5 +229,6 @@ class MessageScheduler:
             self._stop_event.wait(interval)
 
     def _save(self) -> None:
-        if self.store:
-            self.store.save(self._schedules)
+        with self._lock:
+            if self.store:
+                self.store.save(list(self._schedules))
