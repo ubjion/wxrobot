@@ -211,6 +211,33 @@ def test_search_question_uses_web_search_results_before_ai():
     assert "https://example.com" in ai.calls[0][-1]["content"]
 
 
+def test_search_context_is_delimited_and_field_lengths_are_bounded():
+    ai = FakeAIClient(result="回答")
+    long_title = "T" * 300
+    long_url = "https://example.com/" + "u" * 600
+    long_description = "D" * 2000
+
+    class FakeSearch:
+        def search(self, query):
+            return [SearchResult(long_title, long_url, long_description)]
+
+    service = AiReplyService(ai, search_client=FakeSearch())
+
+    service.generate_reply(
+        MessageEvent(user="alice", message={"type": "文本", "content": "请搜索测试资料"})
+    )
+
+    prompt = ai.calls[0][-1]["content"]
+    assert "BEGIN_UNTRUSTED_WEB_RESULTS" in prompt
+    assert "END_UNTRUSTED_WEB_RESULTS" in prompt
+    title_line = next(line for line in prompt.splitlines() if line.startswith("标题："))
+    url_line = next(line for line in prompt.splitlines() if line.startswith("链接："))
+    description_line = next(line for line in prompt.splitlines() if line.startswith("摘要："))
+    assert len(title_line.removeprefix("标题：")) == 200
+    assert len(url_line.removeprefix("链接：")) == 500
+    assert len(description_line.removeprefix("摘要：")) == 1000
+
+
 def test_stable_knowledge_question_skips_web_search():
     ai = FakeAIClient(result="直接回答")
     searched = []
