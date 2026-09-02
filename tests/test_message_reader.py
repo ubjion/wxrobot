@@ -18,7 +18,7 @@ class FakeDB:
         ]
 
 
-def test_poll_once_emits_messages_and_advances_each_user_watermark():
+def test_poll_once_emits_messages_and_ack_advances_user_watermark():
     db = FakeDB(
         {
             "alice": [
@@ -32,11 +32,14 @@ def test_poll_once_emits_messages_and_advances_each_user_watermark():
     events = reader.poll_once()
 
     assert [event.message["local_id"] for event in events] == [1, 2]
+    assert reader.watermarks == {}
+    for event in events:
+        reader.ack(event)
     assert reader.watermarks == {"alice": 12}
     assert db.calls == [("alice", 0)]
 
 
-def test_poll_once_deduplicates_messages_when_database_returns_overlap():
+def test_ack_prevents_database_overlap_from_replaying_message():
     db = FakeDB(
         {
             "alice": [
@@ -47,6 +50,7 @@ def test_poll_once_deduplicates_messages_when_database_returns_overlap():
     reader = MessageReader(db, users=["alice"])
 
     first = reader.poll_once()
+    reader.ack(first[0])
     second = reader.poll_once()
 
     assert len(first) == 1
@@ -65,6 +69,37 @@ def test_poll_once_keeps_watermark_when_database_read_fails():
 
     assert events == []
     assert reader.watermarks == {"alice": 7}
+
+
+def test_poll_requires_explicit_ack_before_advancing_watermark():
+    db = FakeDB({"alice": [{"local_id": 1, "sort_seq": 10, "content": "one"}]})
+    reader = MessageReader(db, users=["alice"])
+
+    event = reader.poll_once()[0]
+
+    assert reader.watermarks == {}
+    reader.ack(event)
+    assert reader.watermarks == {"alice": 10}
+
+
+def test_listener_failure_does_not_ack_later_users_in_same_poll(tmp_path):
+    db = FakeDB({
+        "alice": [{"local_id": 1, "sort_seq": 10, "content": "fail"}],
+        "bob": [{"local_id": 2, "sort_seq": 20, "content": "must retry"}],
+    })
+    reader = MessageReader(db, users=["alice", "bob"])
+    store = JsonWatermarkStore(tmp_path / "watermarks.json")
+    listener = None
+
+    def fail_first(event):
+        listener._stop_event.set()
+        raise RuntimeError("callback failed")
+
+    listener = MessageListener(reader, store, fail_first, interval=0.01)
+    listener._run()
+
+    assert store.load().get("bob", 0) == 0
+    assert [event.user for event in reader.poll_once()] == ["alice", "bob"]
 
 
 def test_poll_once_discovers_new_user_without_replaying_history():

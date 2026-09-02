@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Tuple
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,6 @@ class MessageReader:
         self.users = tuple(dict.fromkeys(users))
         self.watermarks: Dict[str, int] = dict(watermarks or {})
         self.user_provider = user_provider
-        self._seen: Set[Tuple[str, str, Any]] = set()
 
     def poll_once(self) -> List[MessageEvent]:
         """读取所有监听会话的新消息；单个会话失败不会推进其游标。"""
@@ -48,20 +47,26 @@ class MessageReader:
                 continue
 
             ordered = sorted(messages, key=lambda item: item.get("sort_seq", 0))
-            next_seq = since_seq
+            seen_in_poll: set[Tuple[str, str, Any]] = set()
             for message in ordered:
                 sort_seq = message.get("sort_seq", 0)
                 if sort_seq <= since_seq:
                     continue
-                next_seq = max(next_seq, sort_seq)
                 identity = self._identity(user, message)
-                if identity in self._seen:
+                if identity in seen_in_poll:
                     continue
-                self._seen.add(identity)
+                seen_in_poll.add(identity)
                 events.append(MessageEvent(user=user, message=message))
-
-            self.watermarks[user] = next_seq
         return events
+
+    def ack(self, event: MessageEvent) -> None:
+        """仅在消息处理成功后推进对应会话的游标。"""
+        sort_seq = int(event.message.get("sort_seq", 0))
+        if sort_seq <= 0:
+            return
+        self.watermarks[event.user] = max(
+            self.watermarks.get(event.user, 0), sort_seq
+        )
 
     def refresh_users(self) -> None:
         if self.user_provider is None:
@@ -99,11 +104,10 @@ class MessageReader:
 
     def rewind_event(self, event: MessageEvent) -> None:
         sort_seq = int(event.message.get("sort_seq", 0))
-        if sort_seq <= 0:
+        if sort_seq <= 0 or event.user not in self.watermarks:
             return
-        current = self.watermarks.get(event.user, sort_seq)
+        current = self.watermarks[event.user]
         self.watermarks[event.user] = min(current, sort_seq - 1)
-        self._seen = {key for key in self._seen if key[0] != event.user}
 
     @staticmethod
     def _identity(user: str, message: Mapping[str, Any]) -> Tuple[str, str, Any]:
@@ -213,5 +217,7 @@ class MessageListener:
                         except Exception:
                             pass
                     break
+                self.reader.ack(event)
+                self.store.save(self.reader.watermarks)
             self.store.save(self.reader.watermarks)
             self._stop_event.wait(self.interval)
