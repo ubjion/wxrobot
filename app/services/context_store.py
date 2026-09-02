@@ -6,17 +6,25 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Dict, List, Mapping
+from typing import Callable, Dict, List, Mapping
+
+from app.services.privacy import redact_sensitive_text
 
 
 class JsonContextStore:
     """使用 JSON 文件持久化各用户最近的 user/assistant 消息。"""
 
-    def __init__(self, path: str | os.PathLike[str], max_messages: int = 20) -> None:
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        max_messages: int = 20,
+        redactor: Callable[[str], str] = redact_sensitive_text,
+    ) -> None:
         if max_messages <= 0:
             raise ValueError("max_messages must be positive")
         self.path = Path(path)
         self.max_messages = max_messages
+        self.redactor = redactor
 
     def load(self) -> Dict[str, List[dict[str, str]]]:
         try:
@@ -48,8 +56,8 @@ class JsonContextStore:
         data = self.load()
         messages = data.setdefault(user_id, [])
         messages.extend([
-            {"role": "user", "content": user_content},
-            {"role": "assistant", "content": assistant_content},
+            {"role": "user", "content": self.redactor(user_content)},
+            {"role": "assistant", "content": self.redactor(assistant_content)},
         ])
         data[user_id] = messages[-self.max_messages:]
         self._save(data)

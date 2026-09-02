@@ -40,6 +40,26 @@ def test_context_store_keeps_only_latest_messages(tmp_path):
     ]
 
 
+def test_context_store_redacts_sensitive_text_before_persisting(tmp_path):
+    store = JsonContextStore(tmp_path / "contexts.json")
+
+    store.append_exchange(
+        "alice",
+        "电话13800138000，账号wxid_alice123",
+        "邮箱alice@example.com，api_key=sk-test-secret-value",
+    )
+
+    persisted = (tmp_path / "contexts.json").read_text(encoding="utf-8")
+    assert "13800138000" not in persisted
+    assert "wxid_alice123" not in persisted
+    assert "alice@example.com" not in persisted
+    assert "sk-test-secret-value" not in persisted
+    assert "[PHONE]" in persisted
+    assert "[USER]" in persisted
+    assert "[EMAIL]" in persisted
+    assert "[SECRET]" in persisted
+
+
 def test_reply_service_sends_and_persists_user_specific_context(tmp_path):
     ai = FakeAI()
     store = JsonContextStore(tmp_path / "contexts.json")
