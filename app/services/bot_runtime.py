@@ -36,6 +36,10 @@ class BotRuntime:
         content = event.message.get("content")
         if event.user.endswith("@chatroom") and not self._mentions_bot(content):
             return None
+        if isinstance(content, str) and content.strip() == "/清除上下文":
+            cleared = self.reply_service.clear_context(event.user)
+            message = "已清除你的对话上下文。" if cleared else "当前未启用对话上下文。"
+            return self._enqueue_or_send(event, message)
         try:
             command = parse_schedule_command(content)
         except (ValueError, TypeError, OverflowError):

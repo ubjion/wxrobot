@@ -76,6 +76,12 @@ class AiReplyService:
         self.bot_names = {name.strip() for name in (bot_names or set()) if name.strip()}
         self.knowledge_base = knowledge_base
 
+    def clear_context(self, user_id: str) -> bool:
+        if self.context_store is None:
+            return False
+        self.context_store.clear(user_id)
+        return True
+
     def generate_reply(self, event: MessageEvent) -> str | None:
         message_type = event.message.get("type")
         content = event.message.get("content")

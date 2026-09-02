@@ -1,4 +1,5 @@
 from app.messages.reader import MessageEvent
+from app.services.bot_runtime import BotRuntime
 from app.services.context_store import JsonContextStore
 from app.services.reply_service import AiReplyService
 
@@ -10,6 +11,15 @@ class FakeAI:
     def complete(self, messages):
         self.calls.append(messages)
         return "AI 回复"
+
+
+class FakeQueue:
+    def __init__(self):
+        self.calls = []
+
+    def enqueue(self, event, text):
+        self.calls.append((event, text))
+        return "reply-confirmation"
 
 
 def test_context_store_keeps_conversations_isolated_by_user_id(tmp_path):
@@ -79,3 +89,27 @@ def test_reply_service_sends_and_persists_user_specific_context(tmp_path):
         {"role": "user", "content": "继续说"},
         {"role": "assistant", "content": "AI 回复"},
     ]
+
+
+def test_clear_context_command_removes_only_sender_history_without_ai_call(tmp_path):
+    class FailingAI:
+        def complete(self, messages):
+            raise AssertionError("clear command must not call AI")
+
+    store = JsonContextStore(tmp_path / "contexts.json")
+    store.append_exchange("alice", "我的问题", "我的回答")
+    store.append_exchange("bob", "其他问题", "其他回答")
+    queue = FakeQueue()
+    runtime = BotRuntime(AiReplyService(FailingAI(), context_store=store), queue)
+
+    token = runtime.handle_event(
+        MessageEvent(
+            user="alice",
+            message={"type": "文本", "content": "/清除上下文"},
+        )
+    )
+
+    assert token == "reply-confirmation"
+    assert store.get_messages("alice") == []
+    assert store.get_messages("bob") != []
+    assert "已清除" in queue.calls[0][1]
