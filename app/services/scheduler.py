@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 import json
 import os
 from pathlib import Path
@@ -69,9 +69,16 @@ class JsonScheduleStore:
                 os.unlink(temp_name)
 
 
-def _parse_time(value: str) -> datetime:
+def _parse_time(value: str, local_timezone: tzinfo | None = None) -> datetime:
     parsed = datetime.fromisoformat(value)
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    if parsed.tzinfo is None:
+        fallback_timezone = (
+            local_timezone
+            or datetime.now().astimezone().tzinfo
+            or timezone.utc
+        )
+        parsed = parsed.replace(tzinfo=fallback_timezone)
+    return parsed.astimezone(timezone.utc)
 
 
 def _validate_schedule(schedule: ScheduledMessage) -> None:
@@ -88,12 +95,27 @@ class MessageScheduler:
         sender,
         store: JsonScheduleStore | None = None,
         clock: Callable[[], datetime] | None = None,
+        local_timezone: tzinfo | None = None,
     ) -> None:
         self.sender = sender
         self.store = store
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.local_timezone = (
+            local_timezone
+            or datetime.now().astimezone().tzinfo
+            or timezone.utc
+        )
         self._lock = threading.RLock()
-        self._schedules = store.load() if store else []
+        loaded_schedules = store.load() if store else []
+        self._schedules = [
+            replace(
+                schedule,
+                next_run=_parse_time(
+                    schedule.next_run, self.local_timezone
+                ).isoformat(),
+            )
+            for schedule in loaded_schedules
+        ]
         self._in_flight: set[str] = set()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -125,7 +147,9 @@ class MessageScheduler:
             id=f"schedule-{uuid4().hex[:12]}",
             user_id=user_id,
             text=text,
-            next_run=run_at.isoformat(),
+            next_run=_parse_time(
+                run_at.isoformat(), self.local_timezone
+            ).isoformat(),
             interval_seconds=interval_seconds,
         )
         _validate_schedule(schedule)
@@ -148,13 +172,13 @@ class MessageScheduler:
             return False
 
     def run_once(self) -> int:
-        now = self.clock()
+        now = _parse_time(self.clock().isoformat(), self.local_timezone)
         with self._lock:
             due = [
                 schedule
                 for schedule in self._schedules
                 if schedule.id not in self._in_flight
-                and _parse_time(schedule.next_run) <= now
+                and _parse_time(schedule.next_run, self.local_timezone) <= now
             ]
             self._in_flight.update(schedule.id for schedule in due)
 
@@ -170,7 +194,7 @@ class MessageScheduler:
                 continue
             sent += 1
             if schedule.interval_seconds is not None:
-                next_run = _parse_time(schedule.next_run)
+                next_run = _parse_time(schedule.next_run, self.local_timezone)
                 step = timedelta(seconds=schedule.interval_seconds)
                 while next_run <= now:
                     next_run += step

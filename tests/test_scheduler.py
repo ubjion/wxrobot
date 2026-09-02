@@ -78,6 +78,19 @@ def test_scheduler_rejects_empty_or_invalid_schedule_values():
         scheduler.add_interval("alice", "内容", interval_seconds=0)
 
 
+def test_naive_schedule_time_uses_local_timezone_and_is_stored_as_utc():
+    china_timezone = timezone(timedelta(hours=8))
+    scheduler = MessageScheduler(
+        FakeSender(),
+        clock=lambda: datetime(2030, 1, 1, tzinfo=timezone.utc),
+        local_timezone=china_timezone,
+    )
+
+    scheduler.add_once("alice", "本地早八点", datetime(2030, 1, 2, 8, 0))
+
+    assert scheduler.list_schedules()[0].next_run == "2030-01-02T00:00:00+00:00"
+
+
 def test_scheduler_background_thread_sends_due_task_and_stops(tmp_path):
     sender = FakeSender()
     now = datetime.now(timezone.utc)
