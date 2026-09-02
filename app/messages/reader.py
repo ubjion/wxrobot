@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -10,6 +11,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Tuple
+
+from app.services.privacy import anonymous_id
+
+
+logger = logging.getLogger("wx-bot")
 
 
 @dataclass(frozen=True)
@@ -43,7 +49,12 @@ class MessageReader:
             since_seq = self.watermarks.get(user, 0)
             try:
                 messages = self.db.get_new_messages(user, since_seq) or []
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "消息读取失败 session=%s error=%s",
+                    anonymous_id(user),
+                    type(exc).__name__,
+                )
                 continue
 
             ordered = sorted(messages, key=lambda item: item.get("sort_seq", 0))
@@ -73,7 +84,8 @@ class MessageReader:
             return
         try:
             discovered = tuple(dict.fromkeys(self.user_provider()))
-        except Exception:
+        except Exception as exc:
+            logger.warning("会话发现失败 error=%s", type(exc).__name__)
             return
         self.users = tuple(dict.fromkeys((*self.users, *discovered)))
         self.seed_missing_watermarks(discovered)
@@ -88,7 +100,12 @@ class MessageReader:
                     self.watermarks[user] = max(
                         int(item.get("sort_seq", 0)) for item in latest
                     )
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "会话游标初始化失败 session=%s error=%s",
+                    anonymous_id(user),
+                    type(exc).__name__,
+                )
                 continue
 
     def reset_watermarks_to_latest(self, users: Iterable[str] | None = None) -> None:
@@ -99,7 +116,12 @@ class MessageReader:
                     self.watermarks[user] = max(
                         int(item.get("sort_seq", 0)) for item in latest
                     )
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "会话游标重置失败 session=%s error=%s",
+                    anonymous_id(user),
+                    type(exc).__name__,
+                )
                 continue
 
     def rewind_event(self, event: MessageEvent) -> None:
@@ -209,7 +231,12 @@ class MessageListener:
             for event in events:
                 try:
                     self.callback(event)
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "消息处理失败 session=%s error=%s",
+                        anonymous_id(event.user),
+                        type(exc).__name__,
+                    )
                     self.reader.rewind_event(event)
                     if self.error_handler is not None:
                         try:

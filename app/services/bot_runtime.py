@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import logging
 import re
+import time
 from typing import Any
 
 from app.messages.reader import MessageEvent
+from app.services.privacy import anonymous_id
+
+
+logger = logging.getLogger("wx-bot")
 
 
 class BotRuntime:
@@ -73,10 +79,23 @@ class BotRuntime:
                 )
             except Exception:
                 return self._enqueue_or_send(event, self.fallback_reply)
+        started = time.perf_counter()
         try:
             reply = self.reply_service.generate_reply(event)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "回复生成失败 route=ai session=%s error=%s elapsed=%.3f",
+                anonymous_id(event.user),
+                type(exc).__name__,
+                time.perf_counter() - started,
+            )
             reply = self.fallback_reply
+        else:
+            logger.info(
+                "回复生成完成 route=ai session=%s elapsed=%.3f",
+                anonymous_id(event.user),
+                time.perf_counter() - started,
+            )
         if reply is None:
             return None
         return self._enqueue_or_send(event, reply)

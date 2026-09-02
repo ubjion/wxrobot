@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 
@@ -100,6 +101,30 @@ def test_listener_failure_does_not_ack_later_users_in_same_poll(tmp_path):
 
     assert store.load().get("bob", 0) == 0
     assert [event.user for event in reader.poll_once()] == ["alice", "bob"]
+
+
+def test_listener_logs_callback_failure_without_raw_message(caplog, tmp_path):
+    caplog.set_level(logging.WARNING, logger="wx-bot")
+    db = FakeDB({
+        "wxid_private123": [
+            {"local_id": 1, "sort_seq": 10, "content": "不能写入日志的正文"}
+        ]
+    })
+    reader = MessageReader(db, users=["wxid_private123"])
+    store = JsonWatermarkStore(tmp_path / "watermarks.json")
+    listener = None
+
+    def fail(event):
+        listener._stop_event.set()
+        raise LookupError("private failure detail")
+
+    listener = MessageListener(reader, store, fail, interval=0.01)
+    listener._run()
+
+    assert "LookupError" in caplog.text
+    assert "wxid_private123" not in caplog.text
+    assert "不能写入日志的正文" not in caplog.text
+    assert "private failure detail" not in caplog.text
 
 
 def test_poll_once_discovers_new_user_without_replaying_history():

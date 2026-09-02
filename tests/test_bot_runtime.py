@@ -1,5 +1,8 @@
+import logging
+
 from app.messages.reader import MessageEvent
 from app.services.bot_runtime import BotRuntime
+from app.services.privacy import anonymous_id
 
 
 class FakeAI:
@@ -113,3 +116,24 @@ def test_runtime_uses_fallback_reply_when_ai_fails():
 
     assert runtime.handle_event(event) == "reply-1"
     assert queue.calls[0][1] == "我收到啦，AI 暂时不可用，请稍后再试。"
+
+
+def test_runtime_logs_ai_failure_without_raw_identity_or_message(caplog):
+    class FailingAI:
+        def generate_reply(self, event):
+            raise RuntimeError("provider leaked detail")
+
+    caplog.set_level(logging.WARNING, logger="wx-bot")
+    event = MessageEvent(
+        user="wxid_private123",
+        message={"type": "文本", "content": "我的秘密消息"},
+    )
+
+    BotRuntime(FailingAI(), FakeQueue()).handle_event(event)
+
+    logged = caplog.text
+    assert "RuntimeError" in logged
+    assert anonymous_id(event.user) in logged
+    assert "wxid_private123" not in logged
+    assert "我的秘密消息" not in logged
+    assert "provider leaked detail" not in logged
