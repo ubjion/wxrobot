@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from app.messages.reader import MessageEvent
 from app.services.bot_runtime import BotRuntime, parse_schedule_command
 from app.services.scheduler import MessageScheduler
@@ -77,6 +79,25 @@ def test_non_command_still_uses_ai():
     )
 
     assert len(queue.calls) == 1
+    assert scheduler.list_schedules() == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["/每 abc 你好", "/每 -1 你好", "/定时 not-a-time 你好", "/定时"],
+)
+def test_malformed_schedule_command_returns_one_format_error(content):
+    scheduler = MessageScheduler(FakeSender())
+    queue = FakeQueue()
+    runtime = BotRuntime(FakeReplyService(), queue, scheduler=scheduler)
+
+    token = runtime.handle_event(
+        MessageEvent(user="alice", message={"type": "文本", "content": content})
+    )
+
+    assert token == "reply-confirmation"
+    assert len(queue.calls) == 1
+    assert "格式错误" in queue.calls[0][1]
     assert scheduler.list_schedules() == []
 
 

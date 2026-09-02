@@ -36,7 +36,13 @@ class BotRuntime:
         content = event.message.get("content")
         if event.user.endswith("@chatroom") and not self._mentions_bot(content):
             return None
-        command = parse_schedule_command(content)
+        try:
+            command = parse_schedule_command(content)
+        except (ValueError, TypeError, OverflowError):
+            return self._enqueue_or_send(
+                event,
+                "格式错误：/定时 <ISO时间> <内容> 或 /每 <秒数> <内容>",
+            )
         if command is not None and self.scheduler is not None:
             try:
                 kind, value, text = command
