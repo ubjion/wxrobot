@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import logging
 import threading
 import time
@@ -38,7 +39,14 @@ class WeChatUISender:
         name_resolver: Callable[[str], str] | None = None,
         reply_func: Callable[..., Any] | None = None,
         gui_factory: Callable[[], Any] | None = None,
+        name_cache_ttl: float = 600.0,
+        name_cache_size: int = 512,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        if name_cache_ttl <= 0:
+            raise ValueError("name_cache_ttl must be positive")
+        if name_cache_size <= 0:
+            raise ValueError("name_cache_size must be positive")
         self._name_resolver = name_resolver
         self._gui_factory = gui_factory
         self._gui = None
@@ -46,14 +54,27 @@ class WeChatUISender:
         self._using_reference_sender = send_func is None
         self._send_func = send_func
         self._reply_func = reply_func
+        self._name_cache_ttl = float(name_cache_ttl)
+        self._name_cache_size = int(name_cache_size)
+        self._clock = clock
+        self._name_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
 
     def _get_gui(self) -> Any:
-        if self._gui is None:
-            if self._gui_factory is None:
-                from wechatauto.guia import WeChatGUI
-                self._gui_factory = WeChatGUI
-            self._gui = self._gui_factory()
-        return self._gui
+        with self._ui_lock:
+            if self._gui is not None:
+                checker = getattr(self._gui, "is_alive", None)
+                if callable(checker):
+                    try:
+                        if not checker():
+                            self._gui = None
+                    except Exception:
+                        self._gui = None
+            if self._gui is None:
+                if self._gui_factory is None:
+                    from wechatauto.guia import WeChatGUI
+                    self._gui_factory = WeChatGUI
+                self._gui = self._gui_factory()
+            return self._gui
 
     def _load_reference_sender(self) -> Callable[..., Any]:
         try:
@@ -101,11 +122,26 @@ class WeChatUISender:
     def _resolve_name(self, user: str) -> str:
         if self._name_resolver is None:
             return user
-        try:
-            name = self._name_resolver(user)
-        except Exception:
-            return user
-        return name.strip() if isinstance(name, str) and name.strip() else user
+        now = self._clock()
+        with self._ui_lock:
+            cached = self._name_cache.get(user)
+            if cached is not None:
+                created_at, name = cached
+                if now - created_at < self._name_cache_ttl:
+                    self._name_cache.move_to_end(user)
+                    return name
+                self._name_cache.pop(user, None)
+            try:
+                name = self._name_resolver(user)
+            except Exception:
+                return user
+            resolved = name.strip() if isinstance(name, str) and name.strip() else user
+            if resolved != user:
+                self._name_cache[user] = (now, resolved)
+                self._name_cache.move_to_end(user)
+                while len(self._name_cache) > self._name_cache_size:
+                    self._name_cache.popitem(last=False)
+            return resolved
 
     def send(self, user: str, text: str) -> Any:
         if not user:

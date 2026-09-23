@@ -22,6 +22,63 @@ def test_wechat_sender_reuses_gui_instance():
     assert len(created) == 1
 
 
+def test_wechat_sender_rebuilds_only_dead_gui():
+    class FakeGUI:
+        def __init__(self, alive):
+            self.alive = alive
+
+        def is_alive(self):
+            return self.alive
+
+    instances = [FakeGUI(False), FakeGUI(True)]
+    sender = WeChatUISender(gui_factory=lambda: instances.pop(0))
+
+    first = sender._get_gui()
+    second = sender._get_gui()
+    third = sender._get_gui()
+
+    assert first is not second
+    assert second is third
+
+
+def test_contact_name_cache_uses_ttl():
+    now = [0.0]
+    calls = []
+    sender = WeChatUISender(
+        send_func=lambda *args: True,
+        name_resolver=lambda user: calls.append(user) or f"name-{user}",
+        name_cache_ttl=600,
+        name_cache_size=2,
+        clock=lambda: now[0],
+    )
+
+    assert sender._resolve_name("a") == "name-a"
+    assert sender._resolve_name("a") == "name-a"
+    now[0] = 601
+    assert sender._resolve_name("a") == "name-a"
+
+    assert calls == ["a", "a"]
+
+
+def test_contact_name_cache_evicts_least_recently_used_entry():
+    calls = []
+    sender = WeChatUISender(
+        send_func=lambda *args: True,
+        name_resolver=lambda user: calls.append(user) or f"name-{user}",
+        name_cache_ttl=600,
+        name_cache_size=2,
+        clock=lambda: 0.0,
+    )
+
+    sender._resolve_name("a")
+    sender._resolve_name("b")
+    sender._resolve_name("a")
+    sender._resolve_name("c")
+    sender._resolve_name("b")
+
+    assert calls == ["a", "b", "c", "b"]
+
+
 def test_knowledge_and_web_search_run_in_parallel():
     active = 0
     peak = 0
