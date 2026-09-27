@@ -12,6 +12,10 @@
 
 当前默认是自动回复模式；可设置 `WX_BOT_SEND_MODE=manual` 切换为人工确认。
 
+## 参考项目
+
+- [wechatauto-replica：微信 4.x Windows 客户端自动化](https://github.com/fanyuantaier/wechatauto-replica/blob/main/README.zh-CN.md)：本项目读取微信本地 `contact.db`、`message_*.db` 等加密数据库，以及部分 UIA/OCR 微信界面适配能力，参考并使用了该项目提供的实现。
+
 天气问题会直接调用 Open-Meteo 查询，不需要额外 API Key。例如：
 
 ```text
