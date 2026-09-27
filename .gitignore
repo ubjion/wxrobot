@@ -1,4 +1,5 @@
 .firecrawl/
+.env
 .third_party/
 .pytest_cache/
 __pycache__/
