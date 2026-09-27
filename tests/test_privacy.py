@@ -34,4 +34,3 @@ def test_anonymous_id_is_stable_and_does_not_expose_input():
 
     assert first == second
     assert "alice" not in first
-

@@ -43,3 +43,49 @@ def test_rebuild_removes_deleted_documents(tmp_path):
     kb.rebuild(tmp_path)
 
     assert kb.search("旧内容", user_id="alice") == []
+
+
+def test_sync_directory_skips_unchanged_updates_changed_and_removes_deleted(tmp_path):
+    source = tmp_path / "guide.md"
+    source.write_text("第一版操作指南", encoding="utf-8")
+    kb = KnowledgeBase(tmp_path / "knowledge.sqlite")
+
+    assert kb.sync_directory(tmp_path) == 1
+    first_id = kb.search("操作指南", user_id="alice")[0].id
+    assert kb.sync_directory(tmp_path) == 0
+    assert kb.search("操作指南", user_id="alice")[0].id == first_id
+
+    source.write_text("第二版操作指南，增加审批步骤", encoding="utf-8")
+    assert kb.sync_directory(tmp_path) == 1
+    changed = kb.search("审批步骤", user_id="alice")
+    assert len(changed) == 1
+    assert "第二版" in changed[0].text
+
+    source.unlink()
+    assert kb.sync_directory(tmp_path) == 1
+    assert kb.search("审批步骤", user_id="alice") == []
+
+
+def test_fts_ranks_stronger_match_before_newer_weak_match(tmp_path):
+    strong = tmp_path / "strong.md"
+    weak = tmp_path / "weak.md"
+    strong.write_text("退款 退款 退款 政策和退款流程", encoding="utf-8")
+    weak.write_text("退款通知", encoding="utf-8")
+    kb = KnowledgeBase(tmp_path / "knowledge.sqlite")
+    kb.ingest_file(strong)
+    kb.ingest_file(weak)
+
+    results = kb.search("退款", user_id="alice")
+
+    assert [item.source for item in results[:2]] == ["strong.md", "weak.md"]
+
+
+def test_fts_query_with_punctuation_is_safely_tokenized(tmp_path):
+    source = tmp_path / "faq.md"
+    source.write_text("退款政策", encoding="utf-8")
+    kb = KnowledgeBase(tmp_path / "knowledge.sqlite")
+    kb.ingest_file(source)
+
+    results = kb.search("退款 OR (", user_id="alice")
+
+    assert len(results) == 1

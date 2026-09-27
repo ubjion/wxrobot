@@ -48,6 +48,7 @@ python -m pip install -r requirements.txt
 - `WECHAT_ACCOUNT`：指定微信账号目录名；
 - `DEEPSEEK_MODEL`：DeepSeek 模型名；
 - `WX_BOT_POLL_INTERVAL`：消息轮询间隔，默认 1 秒；
+- `WX_BOT_USER_REFRESH_INTERVAL`：重新发现新会话的间隔，默认 30 秒；
 - `WX_BOT_WATERMARK_FILE`：游标文件路径。
 - `WX_BOT_SEND_MODE`：`auto` 自动回复，或 `manual` 人工确认，默认 `auto`。
 - `WX_BOT_FALLBACK_REPLY`：AI 请求失败时的兜底回复文本。

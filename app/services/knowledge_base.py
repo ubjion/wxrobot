@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import re
 import sqlite3
@@ -10,6 +11,7 @@ from typing import Iterable
 
 
 SUPPORTED_EXTENSIONS = {".md", ".markdown", ".txt"}
+INDEX_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -59,8 +61,27 @@ class KnowledgeBase:
                 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
                     text, title, source
                 );
+                CREATE TABLE IF NOT EXISTS document_state (
+                    source TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    owner_id TEXT,
+                    group_id TEXT,
+                    index_version INTEGER NOT NULL DEFAULT 0
+                );
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(document_state)"
+                ).fetchall()
+            }
+            if "index_version" not in columns:
+                connection.execute(
+                    "ALTER TABLE document_state ADD COLUMN "
+                    "index_version INTEGER NOT NULL DEFAULT 0"
+                )
 
     def ingest_directory(
         self,
@@ -88,9 +109,24 @@ class KnowledgeBase:
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             return 0
         text = path.read_text(encoding="utf-8")
-        source = str(path)
+        source = str(path.resolve())
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         chunks = _split_text(text, self.chunk_size)
         with self._connect() as connection:
+            state = connection.execute(
+                "SELECT content_hash,scope,owner_id,group_id,index_version "
+                "FROM document_state WHERE source=?",
+                (source,),
+            ).fetchone()
+            if (
+                state
+                and state["content_hash"] == content_hash
+                and state["scope"] == scope
+                and state["owner_id"] == owner_id
+                and state["group_id"] == group_id
+                and state["index_version"] == INDEX_VERSION
+            ):
+                return 0
             old = connection.execute(
                 "SELECT id FROM documents WHERE source=?", (source,)
             ).fetchone()
@@ -107,15 +143,57 @@ class KnowledgeBase:
                 ).lastrowid
                 connection.execute(
                     "INSERT INTO chunks_fts(rowid,text,title,source) VALUES(?,?,?,?)",
-                    (chunk_id, chunk, path.stem, path.name),
+                    (
+                        chunk_id,
+                        _fts_text(chunk),
+                        _fts_text(path.stem),
+                        path.name,
+                    ),
                 )
+            connection.execute(
+                "INSERT INTO document_state(source,content_hash,scope,owner_id,group_id,index_version) "
+                "VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(source) DO UPDATE SET "
+                "content_hash=excluded.content_hash, scope=excluded.scope, "
+                "owner_id=excluded.owner_id, group_id=excluded.group_id, "
+                "index_version=excluded.index_version",
+                (source, content_hash, scope, owner_id, group_id, INDEX_VERSION),
+            )
         return len(chunks)
+
+    def sync_directory(
+        self,
+        directory: str | Path,
+        scope: str = "public",
+        owner_id: str | None = None,
+        group_id: str | None = None,
+    ) -> int:
+        _validate_scope(scope, owner_id, group_id)
+        root = Path(directory).resolve()
+        files = {
+            path.resolve()
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
+        }
+        changed = 0
+        with self._connect() as connection:
+            rows = connection.execute("SELECT id,source FROM documents").fetchall()
+            for row in rows:
+                source = Path(row["source"]).resolve()
+                if source.is_relative_to(root) and source not in files:
+                    self._delete_document(connection, row["id"])
+                    changed += 1
+        for path in sorted(files):
+            if self.ingest_file(path, scope, owner_id, group_id) > 0:
+                changed += 1
+        return changed
 
     def rebuild(self, directory: str | Path) -> int:
         with self._connect() as connection:
             connection.execute("DELETE FROM chunks_fts")
             connection.execute("DELETE FROM chunks")
             connection.execute("DELETE FROM documents")
+            connection.execute("DELETE FROM document_state")
         return self.ingest_directory(directory)
 
     def search(
@@ -128,25 +206,47 @@ class KnowledgeBase:
         query = query.strip()
         if not query or limit <= 0:
             return []
+        match_query = _fts_query(query)
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT c.id, d.title, d.source, c.text, d.scope, d.owner_id, d.group_id
-                FROM chunks c JOIN documents d ON d.id=c.document_id
-                WHERE (d.scope='public'
-                    OR (d.scope='private' AND d.owner_id=?)
-                    OR (d.scope='group' AND d.group_id=?))
-                  AND c.text LIKE ?
-                ORDER BY c.id DESC LIMIT ?
-                """,
-                (user_id, group_id, f"%{query}%", limit),
-            ).fetchall()
+            if match_query:
+                rows = connection.execute(
+                    """
+                    SELECT c.id, d.title, d.source, c.text,
+                           d.scope, d.owner_id, d.group_id
+                    FROM chunks_fts
+                    JOIN chunks c ON c.id=chunks_fts.rowid
+                    JOIN documents d ON d.id=c.document_id
+                    WHERE chunks_fts MATCH ?
+                      AND (d.scope='public'
+                        OR (d.scope='private' AND d.owner_id=?)
+                        OR (d.scope='group' AND d.group_id=?))
+                    ORDER BY bm25(chunks_fts), c.id DESC LIMIT ?
+                    """,
+                    (match_query, user_id, group_id, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT c.id, d.title, d.source, c.text,
+                           d.scope, d.owner_id, d.group_id
+                    FROM chunks c JOIN documents d ON d.id=c.document_id
+                    WHERE (d.scope='public'
+                        OR (d.scope='private' AND d.owner_id=?)
+                        OR (d.scope='group' AND d.group_id=?))
+                      AND c.text LIKE ?
+                    ORDER BY c.id DESC LIMIT ?
+                    """,
+                    (user_id, group_id, f"%{query}%", limit),
+                ).fetchall()
         return [
             KnowledgeChunk(**{**dict(row), "source": Path(row["source"]).name})
             for row in rows
         ]
 
     def _delete_document(self, connection: sqlite3.Connection, document_id: int) -> None:
+        document = connection.execute(
+            "SELECT source FROM documents WHERE id=?", (document_id,)
+        ).fetchone()
         chunk_ids = connection.execute(
             "SELECT id FROM chunks WHERE document_id=?", (document_id,)
         ).fetchall()
@@ -154,6 +254,10 @@ class KnowledgeBase:
             connection.execute("DELETE FROM chunks_fts WHERE rowid=?", (row["id"],))
         connection.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
         connection.execute("DELETE FROM documents WHERE id=?", (document_id,))
+        if document:
+            connection.execute(
+                "DELETE FROM document_state WHERE source=?", (document["source"],)
+            )
 
 
 def _validate_scope(scope: str, owner_id: str | None, group_id: str | None) -> None:
@@ -182,3 +286,37 @@ def _split_text(text: str, chunk_size: int) -> list[str]:
     if current:
         chunks.append(current)
     return chunks
+
+
+def _fts_text(text: str) -> str:
+    """为默认 FTS5 tokenizer 补充中文单字和双字检索词。"""
+    output: list[str] = []
+    cursor = 0
+    for match in re.finditer(r"[\u4e00-\u9fff]+", text):
+        output.append(text[cursor:match.start()])
+        chinese = match.group(0)
+        terms = list(chinese)
+        terms.extend(
+            chinese[index:index + 2]
+            for index in range(max(len(chinese) - 1, 0))
+        )
+        output.append(" " + " ".join(terms) + " ")
+        cursor = match.end()
+    output.append(text[cursor:])
+    return "".join(output)
+
+
+def _fts_query(query: str) -> str:
+    terms: list[str] = []
+    for token in re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", query):
+        if re.fullmatch(r"[\u4e00-\u9fff]+", token):
+            if len(token) <= 2:
+                terms.append(token)
+            else:
+                terms.extend(
+                    token[index:index + 2]
+                    for index in range(len(token) - 1)
+                )
+        elif token.upper() not in {"AND", "OR", "NOT", "NEAR"}:
+            terms.append(token)
+    return " AND ".join(f'"{term}"' for term in dict.fromkeys(terms))

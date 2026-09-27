@@ -35,15 +35,22 @@ class MessageReader:
         users: Iterable[str],
         watermarks: MutableMapping[str, int] | None = None,
         user_provider: Any | None = None,
+        user_refresh_interval: float = 30.0,
+        clock: Any = time.monotonic,
     ) -> None:
+        if user_refresh_interval <= 0:
+            raise ValueError("user_refresh_interval must be positive")
         self.db = db
         self.users = tuple(dict.fromkeys(users))
         self.watermarks: Dict[str, int] = dict(watermarks or {})
         self.user_provider = user_provider
+        self.user_refresh_interval = user_refresh_interval
+        self._clock = clock
+        self._last_user_refresh: float | None = None
 
     def poll_once(self) -> List[MessageEvent]:
         """读取所有监听会话的新消息；单个会话失败不会推进其游标。"""
-        self.refresh_users()
+        self._refresh_users_if_due()
         events: List[MessageEvent] = []
         for user in self.users:
             since_seq = self.watermarks.get(user, 0)
@@ -69,6 +76,18 @@ class MessageReader:
                 seen_in_poll.add(identity)
                 events.append(MessageEvent(user=user, message=message))
         return events
+
+    def _refresh_users_if_due(self) -> None:
+        if self.user_provider is None:
+            return
+        now = self._clock()
+        if (
+            self._last_user_refresh is not None
+            and now - self._last_user_refresh < self.user_refresh_interval
+        ):
+            return
+        self.refresh_users()
+        self._last_user_refresh = now
 
     def ack(self, event: MessageEvent) -> None:
         """仅在消息处理成功后推进对应会话的游标。"""

@@ -32,8 +32,14 @@ def build_runtime(
     bot_names: set[str] | None = None,
     group_summary_service: Any | None = None,
     user_provider: Any | None = None,
+    user_refresh_interval: float = 30.0,
 ) -> tuple[MessageListener, ApprovalQueue]:
-    reader = MessageReader(db, users=users, user_provider=user_provider)
+    reader = MessageReader(
+        db,
+        users=users,
+        user_provider=user_provider,
+        user_refresh_interval=user_refresh_interval,
+    )
     store = JsonWatermarkStore(watermark_path)
     sender = WeChatUISender(send_func=send_func, name_resolver=getattr(db, "get_nickname", None))
     queue = ApprovalQueue(sender)
@@ -121,7 +127,7 @@ def main() -> None:
     knowledge_db = Path(os.getenv("WX_BOT_KNOWLEDGE_DB", str(_default_watermark_path().with_name("knowledge.sqlite"))))
     knowledge_base = KnowledgeBase(knowledge_db)
     if knowledge_dir.exists():
-        knowledge_base.rebuild(knowledge_dir)
+        knowledge_base.sync_directory(knowledge_dir)
     ai_service = AiReplyService(
         ai_client,
         context_store=context_store,
@@ -136,6 +142,9 @@ def main() -> None:
         max_messages=int(os.getenv("WX_BOT_SUMMARY_MESSAGES", "50")),
     )
     interval = float(os.getenv("WX_BOT_POLL_INTERVAL", "1.0"))
+    user_refresh_interval = float(
+        os.getenv("WX_BOT_USER_REFRESH_INTERVAL", "30.0")
+    )
     send_mode = os.getenv("WX_BOT_SEND_MODE", "auto").strip().lower()
     if send_mode not in {"auto", "manual"}:
         raise ValueError("WX_BOT_SEND_MODE 必须是 auto 或 manual")
@@ -149,6 +158,7 @@ def main() -> None:
         bot_names=bot_names,
         group_summary_service=summary_service,
         user_provider=lambda: get_listening_users(db),
+        user_refresh_interval=user_refresh_interval,
     )
     schedule_path = os.getenv(
         "WX_BOT_SCHEDULE_FILE",

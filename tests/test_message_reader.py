@@ -72,6 +72,30 @@ def test_poll_once_keeps_watermark_when_database_read_fails():
     assert reader.watermarks == {"alice": 7}
 
 
+def test_poll_throttles_dynamic_user_discovery_until_refresh_interval():
+    now = [0.0]
+    calls = []
+
+    def discover_users():
+        calls.append(now[0])
+        return []
+
+    reader = MessageReader(
+        FakeDB({}),
+        users=[],
+        user_provider=discover_users,
+        user_refresh_interval=30,
+        clock=lambda: now[0],
+    )
+
+    reader.poll_once()
+    reader.poll_once()
+    now[0] = 30.0
+    reader.poll_once()
+
+    assert calls == [0.0, 30.0]
+
+
 def test_poll_requires_explicit_ack_before_advancing_watermark():
     db = FakeDB({"alice": [{"local_id": 1, "sort_seq": 10, "content": "one"}]})
     reader = MessageReader(db, users=["alice"])
@@ -133,12 +157,19 @@ def test_poll_once_discovers_new_user_without_replaying_history():
             return [{"local_id": 99, "sort_seq": 100, "content": "历史消息"}]
 
     users = ["alice"]
+    now = [0.0]
 
     def discover_users():
         return users
 
     db = DynamicDB({"alice": []})
-    reader = MessageReader(db, users=[], user_provider=discover_users)
+    reader = MessageReader(
+        db,
+        users=[],
+        user_provider=discover_users,
+        user_refresh_interval=30,
+        clock=lambda: now[0],
+    )
 
     first = reader.poll_once()
     users.append("new-group@chatroom")
@@ -146,6 +177,7 @@ def test_poll_once_discovers_new_user_without_replaying_history():
         {"local_id": 99, "sort_seq": 100, "content": "历史消息"},
         {"local_id": 100, "sort_seq": 101, "content": "新消息"},
     ]
+    now[0] = 30.0
     second = reader.poll_once()
 
     assert first == []
