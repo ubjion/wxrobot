@@ -85,3 +85,8 @@ class DeepSeekClient:
         if not isinstance(content, str) or not content.strip():
             raise DeepSeekError("DeepSeek 返回空回复")
         return content.strip()
+
+    def close(self) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()

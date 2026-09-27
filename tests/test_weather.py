@@ -62,3 +62,48 @@ def test_weather_client_retries_transient_network_failure():
 
     assert report.city == "宁波"
     assert len(attempts) == 3
+
+
+def test_weather_reuses_injected_http_client_and_closes_it():
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+            self.closed = 0
+
+        def get(self, url, params, headers, timeout):
+            self.calls.append(url)
+            if "geocoding" in url:
+                return Response({
+                    "results": [{"name": "宁波", "latitude": 1, "longitude": 2}]
+                })
+            return Response({
+                "current": {
+                    "temperature_2m": 1,
+                    "apparent_temperature": 2,
+                    "relative_humidity_2m": 3,
+                    "weather_code": 0,
+                    "wind_speed_10m": 4,
+                }
+            })
+
+        def close(self):
+            self.closed += 1
+
+    raw = Client()
+    client = OpenMeteoWeatherClient(http_client=raw)
+
+    client.get_current("宁波")
+    client.close()
+
+    assert len(raw.calls) == 2
+    assert raw.closed == 1

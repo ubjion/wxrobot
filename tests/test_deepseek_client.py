@@ -86,3 +86,20 @@ def test_config_loads_key_and_optional_values_from_environment(monkeypatch):
     assert config.api_key == "env-key"
     assert config.base_url == "https://example.test"
     assert config.model == "custom-model"
+
+
+def test_deepseek_close_delegates_to_sdk_client():
+    class ClosableSDK(FakeSDKClient):
+        def __init__(self):
+            super().__init__(FakeCompletions())
+            self.closed = 0
+
+        def close(self):
+            self.closed += 1
+
+    sdk = ClosableSDK()
+    client = DeepSeekClient(DeepSeekConfig(api_key="test"), sdk_client=sdk)
+
+    client.close()
+
+    assert sdk.closed == 1

@@ -65,6 +65,11 @@ class FirecrawlSearchClient:
         logger.info("联网搜索耗时 %.2f 秒，结果 %d 条", time.perf_counter() - started, len(results))
         return results
 
+    def close(self) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()
+
     @staticmethod
     def _value(item: Any, field: str) -> str:
         value = item.get(field) if isinstance(item, dict) else getattr(item, field, "")

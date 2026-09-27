@@ -29,3 +29,19 @@ def test_firecrawl_search_returns_empty_results_when_provider_has_no_web_bucket(
             return SimpleNamespace(web=None)
 
     assert FirecrawlSearchClient(client=FakeFirecrawl()).search("查询") == []
+
+
+def test_firecrawl_close_delegates_to_sdk_client():
+    class FakeFirecrawl:
+        def __init__(self):
+            self.closed = 0
+
+        def close(self):
+            self.closed += 1
+
+    sdk = FakeFirecrawl()
+    client = FirecrawlSearchClient(client=sdk)
+
+    client.close()
+
+    assert sdk.closed == 1
